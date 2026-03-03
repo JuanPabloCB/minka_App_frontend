@@ -2,16 +2,12 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
 
 jobs:
   web:
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: web
 
     steps:
       - name: Checkout
@@ -20,31 +16,17 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
+          cache: "pnpm"
 
-      - name: Enable Corepack + Install pnpm
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.30.3 --activate
-          pnpm -v
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
 
-      - name: Get pnpm store path
-        id: pnpm-store
-        run: echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
-
-      - name: Cache pnpm store
-        uses: actions/cache@v4
-        with:
-          path: ${{ steps.pnpm-store.outputs.STORE_PATH }}
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('web/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install deps
+      - name: Install deps (workspace)
         run: pnpm install --frozen-lockfile
 
-      - name: Lint
-        run: pnpm lint
+      - name: Lint (web)
+        run: pnpm --filter web lint
 
-      - name: Build
-        run: pnpm build
+      - name: Build (web)
+        run: pnpm --filter web build
