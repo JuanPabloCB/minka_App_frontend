@@ -9,6 +9,10 @@ jobs:
   web:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: web
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -16,22 +20,18 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Enable Corepack (pnpm)
-        run: |
-          corepack enable
-          corepack prepare pnpm@10.30.3 --activate
-          pnpm --version
+        run: corepack enable
 
       - name: Install deps
-        working-directory: web
         run: pnpm install --frozen-lockfile
 
       - name: Lint
-        working-directory: web
         run: pnpm lint
 
       - name: Build
-        working-directory: web
         run: pnpm build
