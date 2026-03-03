@@ -2,24 +2,21 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
   pull_request:
 
 jobs:
   web:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: web
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1) Instala pnpm primero (para que el cache de setup-node no falle)
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
-
-      # 2) Ahora sí, setup node + cache pnpm
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -27,14 +24,15 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
+
       - name: Install deps
-        working-directory: web
         run: pnpm install --frozen-lockfile
 
+      # ✅ FIX: evita que Next interprete "lint" como carpeta
       - name: Lint
-        working-directory: web
-        run: pnpm lint
+        run: pnpm exec next lint .
 
       - name: Build
-        working-directory: web
         run: pnpm build
