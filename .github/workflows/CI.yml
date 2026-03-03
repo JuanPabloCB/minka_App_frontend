@@ -2,40 +2,35 @@ name: CI
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ main, develop ]
 
 jobs:
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 1) Instala pnpm PRIMERO (para que exista el comando)
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
-
-      # 2) Luego Node (y ya puedes cachear pnpm)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: "20"
           cache: "pnpm"
           cache-dependency-path: web/pnpm-lock.yaml
 
+      - name: Enable Corepack (pnpm)
+        run: corepack enable
+
       - name: Install dependencies
+        working-directory: web
         run: pnpm install --frozen-lockfile
 
       - name: Lint
+        working-directory: web
         run: pnpm lint
 
       - name: Build
+        working-directory: web
         run: pnpm build
