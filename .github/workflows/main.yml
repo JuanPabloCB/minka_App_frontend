@@ -17,17 +17,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 1) Instala pnpm PRIMERO (para que exista el comando)
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      # 2) Luego Node (y ya puedes cachear pnpm)
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: "pnpm"
           cache-dependency-path: web/pnpm-lock.yaml
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
