@@ -28,15 +28,20 @@ export default function PlanPage() {
   return (
     <div style={{ padding: 24 }}>
       <h2>Ruta creada</h2>
-      <div style={{ marginTop: 12 }}>
-        <div><b>ID:</b> {data.plan.id}</div>
-        <div><b>Status:</b> {data.plan.status}</div>
-        <div><b>UI State:</b> {data.plan.ui_state}</div>
-        <div><b>Title:</b> {data.plan.title}</div>
+      <div>
+        <b>ID:</b> {data.plan.id}
+      </div>
+      <div>
+        <b>Status:</b> {data.plan.status}
+      </div>
+      <div>
+        <b>UI State:</b> {data.plan.ui_state}
+      </div>
+      <div>
+        <b>Title:</b> {data.plan.title}
       </div>
 
-      {/* steps existen pero NO los tienes que mostrar */}
-      <div style={{ marginTop: 16, opacity: 0.7 }}>
+      <div style={{ marginTop: 16, opacity: 0.8 }}>
         (plan_steps existen, pero por ahora no se muestran)
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { apiFetch } from "./http";
 
 export type PlanOut = {
   id: string;
@@ -7,7 +7,7 @@ export type PlanOut = {
   title: string;
   ui_state: string;
   selected_analysts: any[];
-  meta: any;
+  meta: Record<string, any>;
   created_at: string;
   updated_at: string;
 };
@@ -18,7 +18,7 @@ export type PlanStepOut = {
   step_index: number;
   title: string;
   status: string;
-  meta: any;
+  meta: Record<string, any>;
   created_at: string;
   updated_at: string;
 };
@@ -29,5 +29,6 @@ export type PlanWithStepsOut = {
 };
 
 export async function getPlan(planId: string) {
-  return http<PlanWithStepsOut>(`/plans/${planId}`);
+  // GET /api/v1/plans/{planId}
+  return apiFetch<PlanWithStepsOut>(`/plans/${planId}`);
 }

@@ -1,4 +1,4 @@
-import { http } from "./http";
+import { apiFetch } from "./http";
 
 export type SessionOut = {
   id: string;
@@ -8,17 +8,6 @@ export type SessionOut = {
   updated_at: string;
 };
 
-export async function createSession(payload: { user_id: string | null }) {
-  return http<SessionOut>("/sessions", {
-    method: "POST",
-    body: payload,
-  });
-}
-
-export async function getSession(sessionId: string) {
-  return http<SessionOut>(`/sessions/${sessionId}`);
-}
-
 export type OrchestratorMessageOut = {
   id: string;
   session_id: string;
@@ -27,6 +16,15 @@ export type OrchestratorMessageOut = {
   created_at: string;
 };
 
+export async function createSession(payload: { user_id: string | null }) {
+  // POST /api/v1/sessions
+  return apiFetch<SessionOut>("/sessions", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function listSessionMessages(sessionId: string) {
-  return http<OrchestratorMessageOut[]>(`/sessions/${sessionId}/messages`);
+  // GET /api/v1/sessions/{id}/messages
+  return apiFetch<OrchestratorMessageOut[]>(`/sessions/${sessionId}/messages`);
 }
