@@ -16,7 +16,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <Topbar />
         </header>
 
-        <main className="mx-auto w-full max-w-[1200px] px-8 py-8">
+        <main className="mx-auto w-full max-w-[1440px] px-8 py-8">
           {children}
         </main>
       </div>

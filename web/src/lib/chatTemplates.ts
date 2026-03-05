@@ -1,4 +1,4 @@
-export type GoalPresetKey = "custom" | "legal_clauses" | "executive_summary";
+export type GoalPresetKey = "legal_clauses" | "exec_summary" | "custom";
 
 export function presetFirstMessage(key: GoalPresetKey): string | null {
   if (key === "custom") return null;
@@ -11,7 +11,7 @@ export function presetFirstMessage(key: GoalPresetKey): string | null {
     ].join("\n");
   }
 
-  if (key === "executive_summary") {
+  if (key === "exec_summary") {
     return [
       "Quiero un resumen ejecutivo de un documento/contrato.",
       "Estructúralo en: contexto, puntos clave, obligaciones, plazos, riesgos, y recomendaciones.",
