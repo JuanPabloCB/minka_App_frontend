@@ -71,7 +71,7 @@ export default function CreateGoalPage() {
                     <div className="mt-auto pt-6">
                       <button
                        type="button"
-                       onClick={() => router.push("/chat/new?template=legal_clauses")}
+                       onClick={() => router.push("/chat/new?template=clauses")}
                         className="inline-flex h-[52px] items-center justify-center rounded-xl bg-[#5B63FF] px-8 text-[18px] font-semibold text-white hover:bg-[#4c54e6] active:scale-[0.98]"
                       >
                        Iniciar Detección
@@ -108,7 +108,7 @@ export default function CreateGoalPage() {
                     <div className="mt-auto pt-6">
                       <button
                        type="button"
-                        onClick={() => router.push("/chat/new?template=exec_summary")}
+                        onClick={() => router.push("/chat/new?template=summary")}
                         className="inline-flex h-[52px] items-center justify-center rounded-xl bg-[#5B63FF] px-8 text-[18px] font-semibold text-white hover:bg-[#4c54e6] active:scale-[0.98]"
                       >
                        Iniciar Análisis

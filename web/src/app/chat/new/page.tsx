@@ -26,10 +26,12 @@ export default function NewChatPage() {
       );
     })();
   }, [router, templateParam]);
-
+  
+  /*
   return (
     <div style={{ padding: 24, color: "white", background: "#0b1220", minHeight: "100vh" }}>
       Creando sesión...
     </div>
-  );
+  );*/ 
+  
 }
