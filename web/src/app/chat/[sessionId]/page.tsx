@@ -70,6 +70,56 @@ function arraysEqual(a: string[], b: string[]) {
   return a.every((item, idx) => item === b[idx]);
 }
 
+function normalizeUiContext(uiContext: UIContextOut | null | undefined): UIContextOut | null {
+  if (!uiContext || typeof uiContext !== "object") return null;
+
+  return {
+    task_type: typeof uiContext.task_type === "string" ? uiContext.task_type : null,
+    document_type: typeof uiContext.document_type === "string" ? uiContext.document_type : null,
+    analysis_goal: typeof uiContext.analysis_goal === "string" ? uiContext.analysis_goal : null,
+    input_source: typeof uiContext.input_source === "string" ? uiContext.input_source : null,
+    input_file_name: typeof uiContext.input_file_name === "string" ? uiContext.input_file_name : null,
+    output_format: typeof uiContext.output_format === "string" ? uiContext.output_format : null,
+    focus: Array.isArray(uiContext.focus)
+      ? uiContext.focus.filter((item): item is string => typeof item === "string")
+      : [],
+  };
+}
+
+function getPendingHintAssistantMessageId(messages: Msg[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+
+    if (msg.role !== "assistant") continue;
+
+    const hasHints = (msg.ui_hints?.hints?.length ?? 0) > 0;
+    if (!hasHints) return null;
+
+    const hasUserAfter = messages.slice(i + 1).some((next) => next.role === "user");
+    if (hasUserAfter) return null;
+
+    return msg.id;
+  }
+
+  return null;
+}
+
+function getLatestPlanIdFromHistory(
+  history: Awaited<ReturnType<typeof listSessionMessages>>
+): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (msg.role !== "assistant") continue;
+
+    const planId = msg.meta?.plan_id;
+    if (typeof planId === "string" && planId.trim()) {
+      return planId;
+    }
+  }
+
+  return null;
+}
+
 export default function ChatPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const router = useRouter();
@@ -127,12 +177,23 @@ export default function ChatPage() {
         if (cancelled) return;
 
         setMsgs(
-          history.map((m) => ({
-            id: crypto.randomUUID(),
-            role: m.role,
-            content: m.content,
-          }))
+          history.map((m) => {
+            const meta = m.meta ?? null;
+
+            return {
+              id: m.id,
+              role: m.role,
+              content: m.content,
+              ui_hints: m.role === "assistant" ? meta?.ui_hints ?? null : null,
+              ui_bullets: m.role === "assistant" ? meta?.ui_bullets ?? null : null,
+              ui_context: m.role === "assistant" ? normalizeUiContext(meta?.ui_context) : null,
+              isTyping: false,
+              typingDone: true,
+            };
+          })
         );
+
+        setPlanId(getLatestPlanIdFromHistory(history));
       } finally {
         if (!cancelled) {
           setHistoryLoaded(true);
@@ -339,6 +400,10 @@ export default function ChatPage() {
     return null;
   }, [msgs]);
 
+  const pendingHintMsgId = useMemo(() => {
+    return getPendingHintAssistantMessageId(msgs);
+  }, [msgs]);
+
   useEffect(() => {
     if (!latestUiContext) {
       setDisplayedUiContext(emptyDisplayedUiContext);
@@ -519,7 +584,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex gap-6">
+    <div className="flex flex-col gap-6 xl:flex-row">
       {/* Columna izquierda: Chat */}
       <section className="flex-1">
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
@@ -543,7 +608,7 @@ export default function ChatPage() {
           </div>
 
           {/* Contenedor del chat */}
-          <div className="relative flex h-[calc(100vh-64px-64px-56px-92px)] flex-col">
+          <div className="relative flex h-[calc(106vh-64px-64px-56px-92px)] flex-col">
             {/* Mensajes */}
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5">
               {msgs.map((m) => (
@@ -615,7 +680,9 @@ export default function ChatPage() {
                                   />
                                 ) : null}
 
-                                {m.ui_hints && !dismissedHintMsgIds.has(m.id) ? (
+                                {m.ui_hints &&
+                                  pendingHintMsgId === m.id &&
+                                  !dismissedHintMsgIds.has(m.id) ? (
                                   <ChatHints
                                     hints={m.ui_hints}
                                     baseDelayMs={hintsBaseDelay}
@@ -865,13 +932,13 @@ export default function ChatPage() {
       </section>
 
       {/* Columna derecha: contexto */}
-      <aside className="w-[380px] shrink-0">
+      <aside className="w-[32%] min-w-[300px] max-w-[380px]">
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div className="text-sm font-semibold text-slate-900">
             Contexto según MinkaBot
           </div>
 
-          <div className="mt-3 h-[520px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+          <div className="mt-3 h-[476px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
             {!displayedUiContext.task_type &&
               !displayedUiContext.document_type &&
               !displayedUiContext.analysis_goal &&
