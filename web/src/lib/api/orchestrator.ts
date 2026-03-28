@@ -42,13 +42,45 @@ export type UIBulletsOut = {
   items: UIBulletItem[];
 };
 
+export type ResultType =
+  | "highlighted_document"
+  | "analysis_report"
+  | "executive_summary"
+  | "in_app_explanation"
+  | "dashboard_view";
+
+export type InteractionMode =
+  | "free_text"
+  | "hint_required"
+  | "guided_options"
+  | "review_edit";
+
+export type ActiveStep =
+  | "goal_intent"
+  | "document_type"
+  | "analysis_goal"
+  | "focus"
+  | "input_source"
+  | "file_intake"
+  | "result_type"
+  | "output_format"
+  | "confirmation"
+  | "confirmation_edit";
+
+export type ConfirmationState = "none" | "awaiting_confirmation" | "editing";
+
 export type UIContextOut = {
   task_type?: string | null;
   document_type?: string | null;
   analysis_goal?: string | null;
   input_source?: string | null;
   input_file_name?: string | null;
-  output_format?: string | null;
+  uploaded_file_id?: string | null;
+  file_uploaded?: boolean | null;
+  file_validation_status?: string | null;
+  upload_deferred?: boolean | null;
+  output_format?: string | null; // transicional / legacy
+  result_type?: ResultType | null;
   focus?: string[] | null;
 };
 
@@ -58,6 +90,10 @@ export type OrchestratorTurnOut = {
   assistant_message_id: string;
   reply: string;
   created_at: string;
+
+  active_step: ActiveStep;
+  interaction_mode: InteractionMode;
+  confirmation_state: ConfirmationState;
 
   cta_ready: boolean;
   plan_created: boolean;
@@ -70,7 +106,6 @@ export type OrchestratorTurnOut = {
 };
 
 export async function orchestratorTurn(sessionId: string, content: string) {
-  // POST /api/v1/orchestrator/turn/{sessionId}
   return apiFetch<OrchestratorTurnOut>(`/orchestrator/turn/${sessionId}`, {
     method: "POST",
     body: JSON.stringify({ content }),
