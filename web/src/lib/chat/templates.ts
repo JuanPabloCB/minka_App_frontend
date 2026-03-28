@@ -17,8 +17,6 @@ export function getInitialUserMessage(key: TemplateKey) {
   if (key === "clauses") {
     return (
       "Quiero detectar cláusulas críticas y riesgos en un contrato. " +
-      "Primero hazme 3-5 preguntas cortas para entender: (1) tipo de contrato, (2) jurisdicción/país, " +
-      "(3) qué es crítico (plazos, penalidades, confidencialidad, terminación, pagos), (4) el output esperado. " +
       "Luego confirma la meta en una sola frase para que yo responda 'sí'."
     );
   }
@@ -26,8 +24,6 @@ export function getInitialUserMessage(key: TemplateKey) {
   if (key === "summary") {
     return (
       "Quiero un resumen ejecutivo de un documento legal. " +
-      "Primero pregúntame: (1) objetivo del resumen, (2) audiencia (CEO/abogado/cliente), " +
-      "(3) extensión deseada, (4) si debo incluir riesgos o solo puntos clave. " +
       "Luego confirma la meta en una sola frase para que yo responda 'sí'."
     );
   }

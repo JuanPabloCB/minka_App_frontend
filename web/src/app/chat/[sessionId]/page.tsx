@@ -4,7 +4,21 @@ import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { listSessionMessages } from "@/lib/api/sessions";
 import { orchestratorTurn } from "@/lib/api/orchestrator";
-import type { UIHintsOut, UIBulletsOut, UIContextOut, } from "@/lib/api/orchestrator";
+import { API_BASE } from "@/lib/api/http";
+import {
+  uploadSessionFile,
+  completeFileIntake,
+  listSessionFiles,
+  type UploadFileResponse,
+} from "@/lib/api/files";
+import type {
+  UIHintsOut,
+  UIBulletsOut,
+  UIContextOut,
+  InteractionMode,
+  ActiveStep,
+  ConfirmationState,
+} from "@/lib/api/orchestrator";
 import {
   getInitialUserMessage,
   getTemplateKey,
@@ -21,6 +35,9 @@ type Msg = {
   ui_hints?: UIHintsOut | null;
   ui_bullets?: UIBulletsOut | null;
   ui_context?: UIContextOut | null;
+  interaction_mode?: InteractionMode | null;
+  active_step?: ActiveStep | null;
+  confirmation_state?: ConfirmationState | null;
   animate?: "user" | "assistant";
   fullText?: string;       // el texto completo a tipear
   isTyping?: boolean;      // si está en modo typewriter
@@ -28,11 +45,72 @@ type Msg = {
   attachmentName?: string;
   attachmentKind?: ProcessedFileKind;
   attachmentUrl?: string | null;
+  cta_ready?: boolean | null;
+  plan_id?: string | null;
+  plan_status?: string | null;
 };
 
 function capitalizeFirst(value: string | null | undefined) {
   if (!value) return "";
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function formatUiContextValue(
+  field:
+    | "task_type"
+    | "document_type"
+    | "analysis_goal"
+    | "input_source"
+    | "input_file_name"
+    | "uploaded_file_id"
+    | "file_uploaded"
+    | "file_validation_status"
+    | "output_format"
+    | "result_type",
+  value: string | null | undefined
+) {
+  if (!value) return "";
+
+  if (field === "input_source") {
+    const map: Record<string, string> = {
+      local_upload: "Archivo local",
+      pending: "Aún no disponible",
+      google_drive: "Google Drive",
+      paste_text: "Texto pegado en el chat",
+    };
+    return map[value] ?? capitalizeFirst(value.replaceAll("_", " "));
+  }
+
+  if (field === "result_type") {
+    const map: Record<string, string> = {
+      highlighted_document: "Documento resaltado",
+      analysis_report: "Informe",
+      executive_summary: "Resumen ejecutivo",
+      in_app_explanation: "Explicación en la app",
+      dashboard_view: "Vista de dashboard",
+    };
+    return map[value] ?? capitalizeFirst(value.replaceAll("_", " "));
+  }
+
+  if (field === "file_uploaded") {
+    if (value === "true") return "Sí";
+    if (value === "false") return "No";
+  }
+
+  if (field === "file_validation_status") {
+    const map: Record<string, string> = {
+      accepted: "Validado",
+      rejected: "Rechazado",
+      pending: "Pendiente",
+    };
+    return map[value] ?? capitalizeFirst(value.replaceAll("_", " "));
+  }
+
+  if (field === "uploaded_file_id") {
+    return "";
+  }
+
+  return capitalizeFirst(value.replaceAll("_", " "));
 }
 
 type DisplayedUiContext = {
@@ -41,7 +119,11 @@ type DisplayedUiContext = {
   analysis_goal: string;
   input_source: string;
   input_file_name: string;
+  uploaded_file_id: string;
+  file_uploaded: string;
+  file_validation_status: string;
   output_format: string;
+  result_type: string;
   focus: string[];
 };
 
@@ -52,16 +134,40 @@ type ProcessedFileItem = {
   name: string;
   kind: ProcessedFileKind;
   file: File;
+  previewUrl: string | null;
   downloadUrl: string | null;
 };
 
+function mapBackendFileToProcessedFile(item: {
+  id: string;
+  original_filename: string;
+  file_extension: string;
+}): ProcessedFileItem {
+  const ext = (item.file_extension || "").toLowerCase();
+
+  const kind: ProcessedFileKind =
+    ext === ".pdf" ? "pdf" : ext === ".doc" || ext === ".docx" ? "word" : "txt";
+
+  return {
+    id: item.id,
+    name: item.original_filename,
+    kind,
+    file: new File([], item.original_filename),
+    previewUrl: `${API_BASE}/files/preview/${item.id}`,
+    downloadUrl: `${API_BASE}/files/download/${item.id}`,
+  };
+}
 const emptyDisplayedUiContext: DisplayedUiContext = {
   task_type: "",
   document_type: "",
   analysis_goal: "",
   input_source: "",
   input_file_name: "",
+  uploaded_file_id: "",
+  file_uploaded: "",
+  file_validation_status: "",
   output_format: "",
+  result_type: "",
   focus: [],
 };
 
@@ -79,11 +185,34 @@ function normalizeUiContext(uiContext: UIContextOut | null | undefined): UIConte
     analysis_goal: typeof uiContext.analysis_goal === "string" ? uiContext.analysis_goal : null,
     input_source: typeof uiContext.input_source === "string" ? uiContext.input_source : null,
     input_file_name: typeof uiContext.input_file_name === "string" ? uiContext.input_file_name : null,
+    uploaded_file_id:
+      typeof uiContext.uploaded_file_id === "string" ? uiContext.uploaded_file_id : null,
+    file_uploaded:
+      typeof uiContext.file_uploaded === "boolean" ? uiContext.file_uploaded : null,
+    file_validation_status:
+      typeof uiContext.file_validation_status === "string"
+        ? uiContext.file_validation_status
+        : null,
+    upload_deferred:
+      typeof uiContext.upload_deferred === "boolean" ? uiContext.upload_deferred : null,
     output_format: typeof uiContext.output_format === "string" ? uiContext.output_format : null,
+    result_type: typeof uiContext.result_type === "string" ? uiContext.result_type : null,
     focus: Array.isArray(uiContext.focus)
       ? uiContext.focus.filter((item): item is string => typeof item === "string")
       : [],
   };
+}
+
+function isInputLocked(interactionMode: InteractionMode | null | undefined) {
+  return interactionMode === "hint_required";
+}
+
+function isGuidedMode(interactionMode: InteractionMode | null | undefined) {
+  return interactionMode === "guided_options";
+}
+
+function isReviewEditMode(interactionMode: InteractionMode | null | undefined) {
+  return interactionMode === "review_edit";
 }
 
 function getPendingHintAssistantMessageId(messages: Msg[]): string | null {
@@ -146,6 +275,8 @@ export default function ChatPage() {
   const [displayedUiContext, setDisplayedUiContext] =
     useState<DisplayedUiContext>(emptyDisplayedUiContext);
 
+  const [draggingFile, setDraggingFile] = useState(false);
+
   const injectedRef = useRef(false);
 
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -162,6 +293,9 @@ export default function ChatPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [processedFiles, setProcessedFiles] = useState<ProcessedFileItem[]>([]);
 
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [lastUploadResult, setLastUploadResult] = useState<UploadFileResponse | null>(null);
+
   const attachMenuRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -173,13 +307,16 @@ export default function ChatPage() {
       try {
         setHistoryLoaded(false);
 
-        const history = await listSessionMessages(sessionId);
+        const [history, sessionFiles] = await Promise.all([
+          listSessionMessages(sessionId),
+          listSessionFiles(sessionId, true),
+        ]);
+
         if (cancelled) return;
 
         setMsgs(
           history.map((m) => {
             const meta = m.meta ?? null;
-
             return {
               id: m.id,
               role: m.role,
@@ -187,6 +324,9 @@ export default function ChatPage() {
               ui_hints: m.role === "assistant" ? meta?.ui_hints ?? null : null,
               ui_bullets: m.role === "assistant" ? meta?.ui_bullets ?? null : null,
               ui_context: m.role === "assistant" ? normalizeUiContext(meta?.ui_context) : null,
+              interaction_mode: m.role === "assistant" ? meta?.interaction_mode ?? null : null,
+              active_step: m.role === "assistant" ? meta?.active_step ?? null : null,
+              confirmation_state: m.role === "assistant" ? meta?.confirmation_state ?? null : null,
               isTyping: false,
               typingDone: true,
             };
@@ -194,6 +334,7 @@ export default function ChatPage() {
         );
 
         setPlanId(getLatestPlanIdFromHistory(history));
+        setProcessedFiles(sessionFiles.map(mapBackendFileToProcessedFile));
       } finally {
         if (!cancelled) {
           setHistoryLoaded(true);
@@ -409,16 +550,24 @@ export default function ChatPage() {
       setDisplayedUiContext(emptyDisplayedUiContext);
       return;
     }
+    
 
     setDisplayedUiContext({
-      task_type: capitalizeFirst(latestUiContext.task_type ?? ""),
-      document_type: capitalizeFirst(latestUiContext.document_type ?? ""),
-      analysis_goal: capitalizeFirst(latestUiContext.analysis_goal ?? ""),
-      input_source: capitalizeFirst(latestUiContext.input_source ?? ""),
-      input_file_name: capitalizeFirst(latestUiContext.input_file_name ?? ""),
-      output_format: capitalizeFirst(latestUiContext.output_format ?? ""),
+      task_type: formatUiContextValue("task_type", latestUiContext.task_type ?? ""),
+      document_type: formatUiContextValue("document_type", latestUiContext.document_type ?? ""),
+      analysis_goal: formatUiContextValue("analysis_goal", latestUiContext.analysis_goal ?? ""),
+      input_source: formatUiContextValue("input_source", latestUiContext.input_source ?? ""),
+      input_file_name: formatUiContextValue("input_file_name", latestUiContext.input_file_name ?? ""),
+      uploaded_file_id: formatUiContextValue("uploaded_file_id", String(latestUiContext.uploaded_file_id ?? "")),
+      file_uploaded: formatUiContextValue("file_uploaded", String(latestUiContext.file_uploaded ?? "")),
+      file_validation_status: formatUiContextValue(
+        "file_validation_status",
+        latestUiContext.file_validation_status ?? ""
+      ),
+      output_format: formatUiContextValue("output_format", latestUiContext.output_format ?? ""),
+      result_type: formatUiContextValue("result_type", latestUiContext.result_type ?? ""),
       focus: Array.isArray(latestUiContext.focus)
-        ? latestUiContext.focus.map((item) => capitalizeFirst(item))
+        ? latestUiContext.focus.map((item) => capitalizeFirst(item.replaceAll("_", " ")))
         : [],
     });
   }, [latestUiContext]);
@@ -426,6 +575,41 @@ export default function ChatPage() {
   const hasTyping = msgs.some(
     (m) => m.role === "assistant" && m.isTyping && m.typingDone === false
   );
+
+  const latestAssistantInteractionMode = useMemo(() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i];
+      if (msg.role === "assistant" && msg.interaction_mode) {
+        return msg.interaction_mode;
+      }
+    }
+    return null;
+  }, [msgs]);
+
+  const latestAssistantActiveStep = useMemo(() => {
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const msg = msgs[i];
+      if (msg.role === "assistant" && msg.active_step) {
+        return msg.active_step;
+      }
+    }
+    return null;
+  }, [msgs]);
+
+  const inputLockedByInteractionMode = isInputLocked(latestAssistantInteractionMode);
+  const isGuidedOptionsMode = isGuidedMode(latestAssistantInteractionMode);
+  const isReviewMode = isReviewEditMode(latestAssistantInteractionMode);
+  const isFileIntakeStep = latestAssistantActiveStep === "file_intake";
+
+  const attachmentsLocked =
+    loading || (inputLockedByInteractionMode && !isFileIntakeStep);
+
+  useEffect(() => {
+    if (attachmentsLocked && showAttachMenu) {
+      setShowAttachMenu(false);
+    }
+  }, [attachmentsLocked, showAttachMenu]);
+
 
   async function sendText(
     content: string,
@@ -464,13 +648,19 @@ export default function ChatPage() {
         {
           id: assistantId,
           role: "assistant",
-          content: "",                 // empieza vacío
-          fullText: out.reply,         // guardamos el texto completo
+          content: "",
+          fullText: out.reply,
           isTyping: true,
           typingDone: false,
           ui_hints: out.ui_hints ?? null,
           ui_bullets: out.ui_bullets ?? null,
-          ui_context: out.ui_context ?? null,
+          ui_context: normalizeUiContext(out.ui_context ?? null),
+          interaction_mode: out.interaction_mode ?? null,
+          active_step: out.active_step ?? null,
+          confirmation_state: out.confirmation_state ?? null,
+          cta_ready: out.cta_ready ?? false,
+          plan_id: out.plan_id ?? null,
+          plan_status: out.plan_status ?? null,
           animate: "assistant",
         },
       ]);
@@ -487,7 +677,12 @@ export default function ChatPage() {
     const c = text;
     const fileToSend = selectedFile;
 
+    if (inputLockedByInteractionMode && !isFileIntakeStep) return;
     if (!c.trim() && !fileToSend) return;
+
+    if (isFileIntakeStep && fileToSend) {
+      return;
+    }
 
     setText("");
 
@@ -501,17 +696,6 @@ export default function ChatPage() {
           : "txt";
 
       const nextAttachmentUrl = URL.createObjectURL(fileToSend);
-
-      setProcessedFiles((prev) => [
-        {
-          id: crypto.randomUUID(),
-          name: fileToSend.name,
-          kind: nextKind,
-          file: fileToSend,
-          downloadUrl: nextAttachmentUrl,
-        },
-        ...prev,
-      ]);
 
       setMsgs((prev) => [
         ...prev,
@@ -553,14 +737,7 @@ export default function ChatPage() {
     fileInputRef.current?.click();
   }
 
-  function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0] ?? null;
-
-    if (!file) {
-      event.currentTarget.value = "";
-      return;
-    }
-
+  async function handleSelectedFile(file: File) {
     const fileName = file.name.toLowerCase();
 
     const isPdf = fileName.endsWith(".pdf");
@@ -571,23 +748,128 @@ export default function ChatPage() {
 
     if (!isAllowed) {
       alert("Solo se permiten archivos PDF, Word o TXT.");
-      event.currentTarget.value = "";
       return;
     }
 
     setSelectedFile(file);
+    setShowAttachMenu(false);
+    setUploadingFile(true);
+    setLastUploadResult(null);
 
-    // preparado para conectar upload real después:
-    // aquí luego podrás llamar a una función tipo uploadSessionFile(sessionId, file)
+    try {
+      const uploadResult = await uploadSessionFile(sessionId, file);
+      setLastUploadResult(uploadResult);
 
-    event.currentTarget.value = "";
+      const uploadedFile = uploadResult.file;
+
+      if (!uploadResult.ok || !uploadedFile) {
+        setMsgs((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "assistant",
+            content: uploadResult.message,
+            animate: "assistant",
+          },
+        ]);
+        return;
+      }
+
+      setMsgs((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: uploadResult.message,
+          animate: "assistant",
+        },
+      ]);
+
+      const syncResult = await completeFileIntake(sessionId, uploadedFile.id);
+      const refreshedFiles = await listSessionFiles(sessionId, true);
+      setProcessedFiles(refreshedFiles.map(mapBackendFileToProcessedFile));
+
+      setMsgs((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "",
+          fullText: syncResult.reply,
+          isTyping: true,
+          typingDone: false,
+          ui_hints: syncResult.ui_hints ?? null,
+          ui_bullets: syncResult.ui_bullets ?? null,
+          ui_context: normalizeUiContext(syncResult.ui_context ?? null),
+          interaction_mode: syncResult.interaction_mode ?? null,
+          active_step: syncResult.active_step ?? null,
+          confirmation_state: syncResult.confirmation_state ?? null,
+          cta_ready: syncResult.cta_ready ?? false,
+          plan_id: syncResult.plan_id ?? null,
+          plan_status: syncResult.plan_status ?? null,
+          animate: "assistant",
+        },
+      ]);
+
+      if (syncResult.plan_id) {
+        setPlanId(syncResult.plan_id);
+      }
+
+      setSelectedFile(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "No se pudo subir el archivo.";
+
+      setLastUploadResult({
+        ok: false,
+        message,
+        file: null,
+        ui_context: null,
+      });
+
+      setMsgs((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: "No se pudo subir el archivo. Intenta nuevamente o hazlo después.",
+          animate: "assistant",
+        },
+      ]);
+    } finally {
+      setUploadingFile(false);
+      setDraggingFile(false);
+    }
+  }
+
+  async function onFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const inputEl = event.currentTarget;
+    const file = inputEl.files?.[0] ?? null;
+
+    if (!file) {
+      inputEl.value = "";
+      return;
+    }
+
+    if (!isFileIntakeStep) {
+      setSelectedFile(file);
+      setShowAttachMenu(false);
+      inputEl.value = "";
+      return;
+    }
+
+    try {
+      await handleSelectedFile(file);
+    } finally {
+      inputEl.value = "";
+    }
   }
 
   return (
-    <div className="flex flex-col gap-6 xl:flex-row">
+    <div className="flex h-[calc(100dvh-120px)] min-h-0 flex-col gap-6 overflow-hidden xl:flex-row xl:items-stretch">
       {/* Columna izquierda: Chat */}
-      <section className="flex-1">
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+      <section className="flex min-h-0 flex-1 flex-col">
+        <div className="flex h-full min-h-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
           {/* Banner (imagen) + botón Volver encima */}
           <div className="relative">
             <Image
@@ -608,7 +890,7 @@ export default function ChatPage() {
           </div>
 
           {/* Contenedor del chat */}
-          <div className="relative flex h-[calc(106vh-64px-64px-56px-92px)] flex-col">
+          <div className="relative flex h-full min-h-0 flex-col">
             {/* Mensajes */}
             <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5">
               {msgs.map((m) => (
@@ -648,6 +930,111 @@ export default function ChatPage() {
                           </span>
                         </div>
 
+                        {m.active_step === "file_intake" && m.typingDone !== false ? (
+                          <div className="mt-5 flex justify-start">
+                            <div
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                if (!uploadingFile) setDraggingFile(true);
+                              }}
+                              onDragLeave={(e) => {
+                                e.preventDefault();
+                                setDraggingFile(false);
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDraggingFile(false);
+
+                                if (uploadingFile) return;
+
+                                const droppedFile = e.dataTransfer.files?.[0] ?? null;
+                                if (!droppedFile) return;
+
+                                void handleSelectedFile(droppedFile);
+                              }}
+                              className={[
+                                "group relative w-full max-w-[500px] overflow-hidden rounded-[20px] border border-dashed px-5 py-5 text-center transition-all duration-200",
+                                draggingFile
+                                  ? "border-indigo-400 bg-indigo-50/70 shadow-[0_0_0_4px_rgba(99,102,241,0.08)]"
+                                  : "border-slate-300 bg-[#FCFCFD] hover:border-slate-400 hover:bg-slate-50",
+                                uploadingFile ? "pointer-events-none opacity-80" : "",
+                              ].join(" ")}
+                            >
+                              <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(99,102,241,0.08),_transparent_45%)]" />
+
+                              <div className="relative mx-auto flex max-w-[420px] flex-col items-center">
+                                <div
+                                  className={[
+                                    "mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border transition-all duration-200",
+                                    draggingFile
+                                      ? "border-indigo-200 bg-white"
+                                      : "border-slate-200 bg-white",
+                                  ].join(" ")}
+                                >
+                                  <Image
+                                    src="/chat-items/upload-icon-2.svg"
+                                    alt="Subir archivo"
+                                    width={26}
+                                    height={26}
+                                    className="h-[26px] w-[26px] object-contain"
+                                  />
+                                </div>
+
+                                <div className="text-[16px] font-semibold text-slate-900">
+                                  {uploadingFile
+                                    ? "Estamos subiendo tu archivo…"
+                                    : draggingFile
+                                      ? "Suelta tu archivo aquí"
+                                      : "Sube tu archivo para continuar"}
+                                </div>
+
+                                <div className="mt-2 max-w-[380px] text-sm leading-6 text-slate-500">
+                                  Arrástralo y suéltalo aquí o selecciónalo desde tu dispositivo.
+                                  Aceptamos archivos PDF, Word y TXT.
+                                </div>
+
+                                <div className="mt-5 flex flex-wrap items-center justify-center gap-3">
+                                  <button
+                                    type="button"
+                                    onClick={onClickUploadDocument}
+                                    disabled={uploadingFile}
+                                    className="inline-flex min-w-[140px] items-center justify-center rounded-xl border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:border-slate-400 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    {uploadingFile ? "Subiendo..." : "Subir archivo"}
+                                  </button>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => void sendText("Lo haré después")}
+                                    disabled={uploadingFile || loading}
+                                    className="inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                  >
+                                    Lo haré después
+                                  </button>
+                                </div>
+
+                                <div className="mt-4 flex flex-wrap items-center justify-center gap-2 text-xs text-slate-400">
+                                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">
+                                    PDF
+                                  </span>
+                                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">
+                                    DOC / DOCX
+                                  </span>
+                                  <span className="rounded-full border border-slate-200 bg-white px-2.5 py-1">
+                                    TXT
+                                  </span>
+                                </div>
+
+                                {lastUploadResult && !lastUploadResult.ok ? (
+                                  <div className="mt-5 w-full rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                                    {lastUploadResult.message}
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </div>
+                        ) : null}
+
                         <div className="mt-2 space-y-3">
                           {(() => {
                             const canShowExtras = m.typingDone !== false;
@@ -682,16 +1069,28 @@ export default function ChatPage() {
 
                                 {m.ui_hints &&
                                   pendingHintMsgId === m.id &&
-                                  !dismissedHintMsgIds.has(m.id) ? (
+                                  !dismissedHintMsgIds.has(m.id) &&
+                                  m.active_step !== "file_intake" ? (
                                   <ChatHints
                                     hints={m.ui_hints}
                                     baseDelayMs={hintsBaseDelay}
                                     onPick={(v) => {
+                                      const normalized = (v || "").trim().toLowerCase();
+
+                                      if (
+                                        m.active_step === "file_intake" &&
+                                        (normalized === "subir ahora" || normalized === "subir archivo ahora")
+                                      ) {
+                                        onClickUploadDocument();
+                                        return;
+                                      }
+
                                       setDismissedHintMsgIds((prev) => {
                                         const next = new Set(prev);
                                         next.add(m.id);
                                         return next;
                                       });
+
                                       void sendText(v);
                                     }}
                                   />
@@ -832,15 +1231,19 @@ export default function ChatPage() {
             ) : null}
 
             {/* Input (mockup) */}
-            <div className="px-7 pb-4">
+            <div className="px-7 pb-4 bg-transparent">
               <div className="relative flex items-center rounded-full border border-slate-200 bg-white shadow-sm pl-1 pr-1 py-0">
                 {/* + dentro */}
                 <div ref={attachMenuRef} className="relative mr-2">
                   <button
-                    className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-transform duration-150 ease-out hover:scale-110 active:scale-95 hover:text-slate-700 cursor-pointer"
+                    className="grid h-10 w-10 place-items-center rounded-full text-slate-500 transition-transform duration-150 ease-out hover:scale-110 active:scale-95 hover:text-slate-700 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100"
                     type="button"
-                    title="Adjuntar"
-                    onClick={() => setShowAttachMenu((prev) => !prev)}
+                    title={attachmentsLocked ? "No disponible en este paso" : "Adjuntar"}
+                    disabled={attachmentsLocked}
+                    onClick={() => {
+                      if (attachmentsLocked) return;
+                      setShowAttachMenu((prev) => !prev);
+                    }}
                   >
                     <span className="text-[40px] leading-none">+</span>
                   </button>
@@ -877,8 +1280,16 @@ export default function ChatPage() {
                 <input
                   value={text}
                   onChange={(e) => setText(e.target.value)}
-                  placeholder="Escribe tu mensaje…"
-                  disabled={loading}
+                  placeholder={
+                    inputLockedByInteractionMode
+                      ? "Selecciona una de las opciones para continuar…"
+                      : isReviewMode
+                        ? "Indica qué quieres corregir…"
+                        : isGuidedOptionsMode
+                          ? "Puedes escribir, pero lo ideal es elegir una opción…"
+                          : "Escribe tu mensaje…"
+                  }
+                  disabled={loading || inputLockedByInteractionMode}
                   className="flex-1 h-10 bg-transparent text-sm outline-none text-slate-700 placeholder:text-slate-400 disabled:opacity-60"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") void onSend();
@@ -888,7 +1299,7 @@ export default function ChatPage() {
                 {/* botón enviar dentro */}
                 <button
                   onClick={() => void onSend()}
-                  disabled={loading}
+                  disabled={loading || inputLockedByInteractionMode}
                   className="ml-3 grid h-8 w-8 place-items-center rounded-full bg-[#5B63FF] text-white shadow-md hover:opacity-95 disabled:opacity-100 disabled:cursor-not-allowed"
                   type="button"
                   title={loading ? "Procesando..." : "Enviar"}
@@ -931,207 +1342,240 @@ export default function ChatPage() {
         </div>
       </section>
 
-      {/* Columna derecha: contexto */}
-      <aside className="w-[32%] min-w-[300px] max-w-[380px]">
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-sm font-semibold text-slate-900">
-            Contexto según MinkaBot
-          </div>
+      {/* Columna derecha: contexto + archivos */}
+      <aside className="flex min-h-0 w-full xl:w-[32%] xl:min-w-[300px] xl:max-w-[380px]">
+        <div className="flex h-full min-h-0 flex-1 flex-col rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex min-h-0 flex-1 flex-col">
+            <div className="text-sm font-semibold text-slate-900">
+              Contexto según MinkaBot
+            </div>
 
-          <div className="mt-3 h-[476px] overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
-            {!displayedUiContext.task_type &&
-              !displayedUiContext.document_type &&
-              !displayedUiContext.analysis_goal &&
-              !displayedUiContext.input_source &&
-              !displayedUiContext.input_file_name &&
-              !displayedUiContext.output_format &&
-              displayedUiContext.focus.length === 0 ? (
-              <div className="flex h-full items-center justify-center text-center text-sm text-slate-500">
-                El contexto aparecerá aquí conforme MinkaBot entienda mejor tu meta.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {displayedUiContext.task_type ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Tipo de tarea
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">
-                        {displayedUiContext.task_type}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {displayedUiContext.document_type ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Tipo de documento
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-medium text-red-900">
-                        {displayedUiContext.document_type}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {displayedUiContext.analysis_goal ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Objetivo del análisis
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
-                        {displayedUiContext.analysis_goal}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {displayedUiContext.input_source ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Fuente de entrada
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
-                        {displayedUiContext.input_source}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {displayedUiContext.input_file_name ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Archivo
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-700">
-                        {displayedUiContext.input_file_name}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {displayedUiContext.output_format ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Formato de salida
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      <span className="rounded-full border border-fuchsia-200 bg-fuchsia-100 px-3 py-1 text-xs font-medium text-fuchsia-700">
-                        {displayedUiContext.output_format}
-                      </span>
-                    </div>
-                  </div>
-                ) : null}
-
-                {Array.isArray(displayedUiContext.focus) &&
-                  displayedUiContext.focus.length > 0 ? (
-                  <div>
-                    <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
-                      Enfoque
-                    </div>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {displayedUiContext.focus.map((item, idx) => (
-                        <span
-                          key={`${item}-${idx}`}
-                          className="rounded-full border border-violet-300 bg-violet-100 px-3 py-1 text-xs font-medium text-violet-900"
-                        >
-                          {capitalizeFirst(item)}
+            <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-xl border border-slate-200 bg-slate-50 p-4">
+              {!displayedUiContext.task_type &&
+                !displayedUiContext.document_type &&
+                !displayedUiContext.analysis_goal &&
+                !displayedUiContext.result_type &&
+                !displayedUiContext.input_source &&
+                !displayedUiContext.input_file_name &&
+                !displayedUiContext.output_format &&
+                displayedUiContext.focus.length === 0 ? (
+                <div className="flex min-h-[280px] items-center justify-center text-center text-sm text-slate-500">
+                  El contexto aparecerá aquí conforme MinkaBot entienda mejor tu meta.
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {displayedUiContext.task_type ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Tipo de tarea
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800">
+                          {displayedUiContext.task_type}
                         </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="text-sm font-semibold text-slate-900">
-            Archivos procesados
-          </div>
-
-          <div className="mt-3 h-[160px] overflow-y-auto space-y-3 pr-1">
-            {processedFiles.length === 0 ? (
-              <div className="flex h-[160px] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
-                Aún no hay archivos procesados.
-              </div>
-            ) : (
-              processedFiles.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div
-                      className={
-                        item.kind === "pdf"
-                          ? "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-red-100 text-xs font-bold text-red-600"
-                          : item.kind === "word"
-                            ? "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-xs font-bold text-blue-600"
-                            : "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200 text-xs font-bold text-slate-700"
-                      }
-                    >
-                      {item.kind === "pdf" ? "PDF" : item.kind === "word" ? "DOC" : "TXT"}
-                    </div>
-
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-slate-900">
-                        {item.name}
                       </div>
                     </div>
-                  </div>
+                  ) : null}
 
-                  {item.downloadUrl ? (
-                    <a
-                      href={item.downloadUrl}
-                      download={item.name}
-                      className="ml-3 shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
-                      title="Descargar"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className="h-5 w-5"
-                      >
-                        <path d="M12 3v12" />
-                        <path d="M7 10l5 5 5-5" />
-                        <path d="M5 21h14" />
-                      </svg>
-                    </a>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled
-                      className="ml-3 shrink-0 rounded-lg p-2 text-slate-300"
-                      title="Descargar"
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        className="h-5 w-5"
-                      >
-                        <path d="M12 3v12" />
-                        <path d="M7 10l5 5 5-5" />
-                        <path d="M5 21h14" />
-                      </svg>
-                    </button>
-                  )}
+                  {displayedUiContext.document_type ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Tipo de documento
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-red-300 bg-red-100 px-3 py-1 text-xs font-medium text-red-900">
+                          {displayedUiContext.document_type}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {displayedUiContext.analysis_goal ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Objetivo del análisis
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+                          {displayedUiContext.analysis_goal}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {displayedUiContext.result_type ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Tipo de resultado
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800">
+                          {displayedUiContext.result_type}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {displayedUiContext.input_source ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Fuente de entrada
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-800">
+                          {displayedUiContext.input_source}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {displayedUiContext.input_file_name ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Archivo
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-orange-200 bg-orange-50 px-3 py-1 text-xs font-medium text-orange-700">
+                          {displayedUiContext.input_file_name}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {displayedUiContext.output_format ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Formato de salida
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className="rounded-full border border-fuchsia-200 bg-fuchsia-100 px-3 py-1 text-xs font-medium text-fuchsia-700">
+                          {displayedUiContext.output_format}
+                        </span>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {Array.isArray(displayedUiContext.focus) &&
+                    displayedUiContext.focus.length > 0 ? (
+                    <div>
+                      <div className="text-[13px] font-semibold uppercase tracking-[0.08em] text-slate-500">
+                        Enfoque
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {displayedUiContext.focus.map((item, idx) => (
+                          <span
+                            key={`${item}-${idx}`}
+                            className="rounded-full border border-violet-300 bg-violet-100 px-3 py-1 text-xs font-medium text-violet-900"
+                          >
+                            {capitalizeFirst(item)}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
-              ))
-            )}
+              )}
+            </div>
+          </div>
+
+          <div className="mt-6 border-t border-slate-100 pt-6">
+            <div className="text-sm font-semibold text-slate-900">
+              Archivos procesados
+            </div>
+
+            <div className="mt-3 max-h-[240px] overflow-y-auto space-y-3 pr-1">
+              {processedFiles.length === 0 ? (
+                <div className="flex min-h-[160px] items-center justify-center rounded-xl border border-dashed border-slate-200 bg-slate-50 text-sm text-slate-500">
+                  Aún no hay archivos procesados.
+                </div>
+              ) : (
+                processedFiles.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+                  >
+                    <div
+                      role={item.previewUrl ? "button" : undefined}
+                      tabIndex={item.previewUrl ? 0 : -1}
+                      onClick={() => {
+                        if (item.previewUrl) {
+                          window.open(item.previewUrl, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      onKeyDown={(e) => {
+                        if (!item.previewUrl) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          window.open(item.previewUrl, "_blank", "noopener,noreferrer");
+                        }
+                      }}
+                      className={`flex min-w-0 flex-1 items-center gap-3 ${item.previewUrl ? "cursor-pointer" : ""
+                        }`}
+                    >
+                      <div
+                        className={
+                          item.kind === "pdf"
+                            ? "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-red-100 text-xs font-bold text-red-600"
+                            : item.kind === "word"
+                              ? "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100 text-xs font-bold text-blue-600"
+                              : "shrink-0 flex h-10 w-10 items-center justify-center rounded-xl bg-slate-200 text-xs font-bold text-slate-700"
+                        }
+                      >
+                        {item.kind === "pdf" ? "PDF" : item.kind === "word" ? "DOC" : "TXT"}
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-slate-900">
+                          {item.name}
+                        </div>
+                      </div>
+                    </div>
+
+                    {item.downloadUrl ? (
+                      <a
+                        href={item.downloadUrl}
+                        download={item.name}
+                        className="ml-3 shrink-0 rounded-lg p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+                        title="Descargar"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          className="h-5 w-5"
+                        >
+                          <path d="M12 3v12" />
+                          <path d="M7 10l5 5 5-5" />
+                          <path d="M5 21h14" />
+                        </svg>
+                      </a>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        className="ml-3 shrink-0 rounded-lg p-2 text-slate-300"
+                        title="Descargar"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          className="h-5 w-5"
+                        >
+                          <path d="M12 3v12" />
+                          <path d="M7 10l5 5 5-5" />
+                          <path d="M5 21h14" />
+                        </svg>
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
           </div>
         </div>
       </aside>

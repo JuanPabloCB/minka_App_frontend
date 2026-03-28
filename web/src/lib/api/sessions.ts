@@ -26,6 +26,26 @@ export type OrchestratorMessageMetaOut = {
   plan_created?: boolean;
   plan_id?: string | null;
   plan_status?: string | null;
+
+  interaction_mode?:
+  | "free_text"
+  | "hint_required"
+  | "guided_options"
+  | "review_edit"
+  | null;
+  active_step?:
+  | "goal_intent"
+  | "document_type"
+  | "analysis_goal"
+  | "focus"
+  | "input_source"
+  | "file_intake"
+  | "result_type"
+  | "output_format"
+  | "confirmation"
+  | "confirmation_edit"
+  | null;
+  confirmation_state?: "none" | "awaiting_confirmation" | "editing" | null;
 };
 
 export type OrchestratorMessageOut = {
